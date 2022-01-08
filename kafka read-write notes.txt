@@ -1,0 +1,46 @@
+To write:
+
+* Create an aiohttp session.
+* Create a kafkit.registry.aiohttp.RegistryApi.
+* Register the schema with RegistryApi.register_schema.
+  For production, read the schema with RegistryApi.get_schema_by_subject
+  to avoid registering possibly incompatible schemas.
+* Create a serializer: kafkit.registry.Serializer.
+* Create a aiokafka.AIOKafkaProducer
+* Convert the data from a pydantic model to a dict.
+* Write the dict using the producer.
+
+To read:
+* Create an aiohttp session.
+* Create a kafkit.registry.aiohttp.RegistryApi.
+* Create a kafkit.registry.Deserializer.
+* Read the data using aiokafka.AIOKafkaConsumer.
+  This is where we specify the kafka topic name.
+* Deserialize the data to a dict, which includes keys "id" and "message".
+* Convert the message to a pydantic model.
+
+Reading returns a dict with "id" and "message" keys.
+Presumably "id" identifies the topic, which allows one consumer to read many topics.
+
+
+My timings:
+
+read_kafka.py MTM1M3 tel_forceActuatorData -n 100 -t &
+# wait for it to start, then...
+write_kafka.py MTM1M3 tel_forceActuatorData -n 100
+
+ack=1:
+Wrote 10000 messages in 19.70 seconds; 507.7 messages/second
+Read 9999 messages in 19.69 seconds: 507.8 messages/second
+
+ack=0:
+Wrote 10000 messages in 11.66 seconds; 857.8 messages/second
+Read 9999 messages in 12.40 seconds: 806.3 messages/second
+
+ack=1 with no pydantic model:
+Wrote 10000 messages in 13.31 seconds; 751.1 messages/second
+Read 9999 messages in 13.31 seconds: 751.4 messages/second
+
+ack=0 with no pydantic model:
+Wrote 10000 messages in 5.30 seconds; 1886.8 messages/second
+Read 9999 messages in 5.43 seconds: 1842.4 messages/second

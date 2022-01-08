@@ -1,0 +1,14 @@
+When you have time I would like to ask your advice on how to model DDS domains and partitions in Kafka.
+
+* Domain: readers and writers in one DDS domain are completely isolated from other domains. Schemas and quality of service for topics in different domains can be completely different. We have a few different domains on the summit to try new code without interfering with production code. In DDS domains are small integers.
+* Partition: Less isolated than domains; schemas and quality of service for topics must match, but messages in one partition aren’t seen in another (that is merely the way we use partitions; DDS actually allows reading from and writing to multiple partitions). One of the main uses cases for partitions is in unit tests, to prevent one test from seeing messages from another test. In DDS partition names are strings that can be quite long.
+
+With Kafka I think the main point of domains is to isolate schemas.
+At present our topic names are `lsst.sal.<component>.<topic>` and schemas are registered using topic-name + "-value" and use `name=<topic>, namespace=lsst.sal.<component>`.
+
+One way to model domains is by adding a domain field: change `lsst.sal.<component>` to `lsst.sal.<domain>.<component>` everywhere.
+Another option is to model domains as separate kafka services (at least separate brokers and schema registries).
+
+I'm not sure what to do about partitions.
+If it's easy to do, it might be worth naming the topics with a partition field, and the schemas without, so schemas are shared across partitions.
+But if proliferation of schemas is not a problem, it might be simpler to just consolidate the domain and partition concepts and have a single name that serves as both.
