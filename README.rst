@@ -34,8 +34,9 @@ This will download and run several docker images. The hostname and the port for 
 
 Both command-line executables take these arguments:
 * The SAL component name (e.g. Test or MTM1M3)
-* The topic attribute name (e.g. evt_summaryState)
-* The -n/--number option to specify the number of reads/writes
+* The topic attribute name (e.g. evt_summaryState).
+  The reader can read multiple topics, but the writer only writes one.
+* The -n/--number option to specify the number of reads/writes.
 * The -h/--help option to print help.
 
 The writer also supports:
@@ -55,11 +56,9 @@ The reader also supports:
   If you omit -t the reader will print each message it reads.
 * --postprocess test the performance of different kinds of data classes to hold the result.
 
+
 Here is an example:
 
 read_kafka.py MTM1M3 tel_forceActuatorData -n 1000 -t --postprocess=simple_namespace &
 # wait for it to start, then...
 write_kafka.py MTM1M3 tel_forceActuatorData -n 1000 --validation=custom
-
-Note: for optimal timing it may help to register the schema before you start reading,
-by running write_kafka.py once. This will also avoid a warning message.
