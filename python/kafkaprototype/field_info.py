@@ -107,9 +107,7 @@ class FieldInfo:
         self.default_scalar_value = python_type()
 
     @classmethod
-    def from_xml_element(
-        cls, element: ElementTree.Element, is_indexed: bool
-    ) -> FieldInfo:
+    def from_xml_element(cls, element: ElementTree.Element, indexed: bool) -> FieldInfo:
         """Construct a FieldInfo from an XML element."""
         name = element.find("EFDB_Name").text
         description = find_optional(element, "Description", "")
@@ -126,7 +124,7 @@ class FieldInfo:
             description=description,
         )
 
-    def create_pydantic_arg(self) -> typing.Tuple[typing.Type, typing.Any]:
+    def make_pydantic_arg(self) -> typing.Tuple[typing.Type, typing.Any]:
         """Return (dtype, pydantic.Field or scalar default).
 
         The result can be used as an argument value
@@ -153,7 +151,7 @@ class FieldInfo:
                 field = self.default_scalar_value
         return (dtype, field)
 
-    def create_dataclass_tuple(
+    def make_dataclass_tuple(
         self,
     ) -> typing.Tuple[str, typing.Type, dataclasses.field]:
         """Create field data for dataclasses.make_dataclasses."""
@@ -168,7 +166,7 @@ class FieldInfo:
             field = dataclasses.field(default=self.default_scalar_value)
         return (self.name, dtype, field)
 
-    def create_avro_schema(self) -> typing.Dict[str, typing.Any]:
+    def make_avro_schema(self) -> typing.Dict[str, typing.Any]:
         """Return an Avro schema for this field."""
         scalar_type = AVRO_TYPES[self.sal_type]
         if self.nelts > 1:

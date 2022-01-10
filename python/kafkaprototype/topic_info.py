@@ -116,14 +116,14 @@ _ACKCMD_FIELDS_LIST = [
 ACKCMD_FIELDS = {info.name: info for info in _ACKCMD_FIELDS_LIST}
 
 
-def make_ackcmd_topic_info(component_name, is_indexed):
+def make_ackcmd_topic_info(component_name, indexed):
     """Make an ackcmd topic for a given component.
 
     Parameters
     ----------
     component_name : str
         SAL component name, e.g. MTMount
-    is_indexed : str
+    indexed : str
         Is this component indexed?
 
     Returns
@@ -132,7 +132,7 @@ def make_ackcmd_topic_info(component_name, is_indexed):
         Info for the ackcmd topic.
     """
     fields = PRIVATE_FIELDS.copy()
-    if not is_indexed:
+    if not indexed:
         del fields["private_index"]
     fields.update(ACKCMD_FIELDS)
     return TopicInfo(
@@ -213,7 +213,7 @@ class TopicInfo:
 
     @classmethod
     def from_xml_element(
-        cls, element: ElementTree.Element, component_name: str, is_indexed: bool
+        cls, element: ElementTree.Element, component_name: str, indexed: bool
     ) -> TopicInfo:
         """Construct a TopicInfo from a topic XML element.
 
@@ -225,7 +225,7 @@ class TopicInfo:
             XML topic element; an of SALCommand, SALEvent, or SALTelemetry.
         component_name : str
             SAL component name, e.g. MTMount
-        is_indexed : str
+        indexed : str
             Is this component indexed?
         """
         full_name = element.find("EFDB_Topic").text
@@ -233,12 +233,10 @@ class TopicInfo:
         description = find_optional(element, "Description", "")
 
         fields = PRIVATE_FIELDS.copy()
-        if not is_indexed:
+        if not indexed:
             del fields["private_index"]
         for field_element in element.findall("item"):
-            field_info = FieldInfo.from_xml_element(
-                field_element, is_indexed=is_indexed
-            )
+            field_info = FieldInfo.from_xml_element(field_element, indexed=indexed)
             if field_info.name in fields:
                 raise RuntimeError(f"field {field_info.name} already found.")
             fields[field_info.name] = field_info
@@ -249,7 +247,7 @@ class TopicInfo:
             fields=fields,
         )
 
-    def create_pydantic_model(self):
+    def make_pydantic_model(self):
         """Create a pydantic Model.
 
         The name of the model is self.attr_name.
@@ -259,7 +257,7 @@ class TopicInfo:
         and all field descriptions and units.
         """
         kwargs = {
-            field_info.name: field_info.create_pydantic_arg()
+            field_info.name: field_info.make_pydantic_arg()
             for field_info in self.fields.values()
         }
         model = pydantic.create_model(self.attr_name, **kwargs)
@@ -267,10 +265,10 @@ class TopicInfo:
         model.__config__.extra = pydantic.Extra.forbid
         return model
 
-    def create_dataclass(self):
+    def make_dataclass(self):
         """Create a dataclass."""
         field_args = [
-            field_info.create_dataclass_tuple() for field_info in self.fields.values()
+            field_info.make_dataclass_tuple() for field_info in self.fields.values()
         ]
 
         def validate(
@@ -298,14 +296,14 @@ class TopicInfo:
             self.attr_name, field_args, namespace={"__post_init__": validate}
         )
 
-    def create_avro_schema(self):
+    def make_avro_schema(self):
         """Create an avro schema."""
         return {
             "type": "record",
             "name": self.sal_name,
             "namespace": f"lsst.sal.{self.component_name}",
             "fields": [
-                field_info.create_avro_schema() for field_info in self.fields.values()
+                field_info.make_avro_schema() for field_info in self.fields.values()
             ],
         }
 

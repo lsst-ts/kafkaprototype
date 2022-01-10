@@ -26,7 +26,7 @@ class ComponentInfo:
         SAL component name
     description : str
         Description, from SALSubsystems.xml
-    is_indexed : bool
+    indexed : bool
         Is this component indexed (can there be different instances
         with different SAL indices)?
     added_generics : List [str]
@@ -42,17 +42,17 @@ class ComponentInfo:
         self._set_basics()
         self.topics = self._make_topics()
 
-    def create_avro_schema_dict(self) -> typing.Dict[str, typing.Dict[str, typing.Any]]:
+    def make_avro_schema_dict(self) -> typing.Dict[str, typing.Dict[str, typing.Any]]:
         """Create a dict of topic attr name: Avro schema dict."""
         return {
-            topic_info.attr_name: topic_info.create_avro_schema()
+            topic_info.attr_name: make_avro_schema()
             for topic_info in self.topics.values()
         }
 
-    def create_pydantic_model_dict(self) -> typing.Dict[str, pydantic.Model]:
+    def make_pydantic_model_dict(self) -> typing.Dict[str, pydantic.Model]:
         """Create a dict of topic attr name: pydantic Model."""
         return {
-            topic_info.attr_name: topic_info.create_pydantic_model()
+            topic_info.attr_name: make_pydantic_model()
             for topic_info in self.topics.values()
         }
 
@@ -79,7 +79,7 @@ class ComponentInfo:
     def _make_topics(self) -> typing.Dict[str, TopicInfo]:
         """Set the ``topics`` attribute.
 
-        The ``name``, ``is_indexed``, and ``added_generics`` fields must be
+        The ``name``, ``indexed``, and ``added_generics`` fields must be
         set before calling this.
         """
         # Dict of topic_name: topic element
@@ -118,17 +118,17 @@ class ComponentInfo:
 
         topics_list: typing.List[TopicInfo] = [
             TopicInfo.from_xml_element(
-                topic_element, component_name=self.name, is_indexed=self.is_indexed
+                topic_element, component_name=self.name, indexed=self.indexed
             )
             for topic_element in topic_element_dict.values()
         ]
         topics_list.append(
-            make_ackcmd_topic_info(component_name=self.name, is_indexed=self.is_indexed)
+            make_ackcmd_topic_info(component_name=self.name, indexed=self.indexed)
         )
         return {info.attr_name: info for info in topics_list}
 
     def _set_basics(self) -> None:
-        """Parse SALSubystems.xml and set the added_generics, is_indexed,
+        """Parse SALSubystems.xml and set the added_generics, indexed,
         and description fields
 
         The ``name`` field must be set before calling this.
@@ -150,7 +150,7 @@ class ComponentInfo:
         self.added_generics = ["mandatory"] + [
             item.strip() for item in element.find("AddedGenerics").text.split(",")
         ]
-        self.is_indexed = element.find("IndexEnumeration").text.strip() != "no"
+        self.indexed = element.find("IndexEnumeration").text.strip() != "no"
 
 
 def parse_sal_generics():

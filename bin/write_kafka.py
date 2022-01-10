@@ -19,9 +19,9 @@ class ValidationType(enum.Enum):
     NONE = enum.auto()
     CUSTOM = enum.auto()
     DATACLASS = enum.auto()
-    DATACLASS_PLUS_DECODE = enum.auto()
+    DATACLASS_AND_DECODE = enum.auto()
     PYDANTIC = enum.auto()
-    PYDANTIC_PLUS_DECODE = enum.auto()
+    PYDANTIC_AND_DECODE = enum.auto()
 
 
 VALIDATION_DICT = {item.name.lower(): item for item in ValidationType}
@@ -37,10 +37,16 @@ async def main() -> None:
         "-n", "--number", type=int, default=1, help="Number of messages to write"
     )
     parser.add_argument(
+        "--index",
+        type=int,
+        default=0,
+        help="SAL index; ignored for non-indexed components",
+    )
+    parser.add_argument(
         "--nowait_ack", action="store_true", help="Wait for ack from Kafka (safer)?"
     )
     parser.add_argument(
-        "--validation", choices=VALIDATION_DICT.keys(), default="pydantic"
+        "--validation", choices=VALIDATION_DICT.keys(), default="dataclass"
     )
     args = parser.parse_args()
     validation = VALIDATION_DICT[args.validation]
@@ -49,9 +55,9 @@ async def main() -> None:
     print("Topics =", list(component_info.topics.keys()))
     print(f"Obtaining info for topic {args.topic}")
     topic_info = component_info.topics[args.topic]
-    Model = topic_info.create_pydantic_model()
-    DataClass = topic_info.create_dataclass()
-    avro_schema = topic_info.create_avro_schema()
+    Model = topic_info.make_pydantic_model()
+    DataClass = topic_info.make_dataclass()
+    avro_schema = topic_info.make_avro_schema()
     print("avro_schema=", avro_schema)
     acks = 0 if args.nowait_ack else 1
     print("acks=", acks)
@@ -99,6 +105,8 @@ async def main() -> None:
             for i in range(args.number):
                 data_dict["private_seqNum"] = i + 1
                 data_dict["private_sndStamp"] = time.time()
+                if component_info.indexed:
+                    data_dict["private_index"] = args.index
                 send_data_dict = data_dict
                 if validation == ValidationType.NONE:
                     pass
@@ -106,14 +114,14 @@ async def main() -> None:
                     topic_info.validate_data(data_dict)
                 elif validation == ValidationType.DATACLASS:
                     DataClass(**data_dict)
-                elif validation == ValidationType.DATACLASS_PLUS_DECODE:
+                elif validation == ValidationType.DATACLASS_AND_DECODE:
                     model = DataClass(**data_dict)
                     # Note: dataclasses.asdict is much slower than vars
                     # send_data_dict = dataclasses.asdict(model)
                     send_data_dict = vars(model)
                 elif validation == ValidationType.PYDANTIC:
                     Model(**data_dict)
-                elif validation == ValidationType.PYDANTIC_PLUS_DECODE:
+                elif validation == ValidationType.PYDANTIC_AND_DECODE:
                     model = Model(**data_dict)
                     send_data_dict = model.dict()
                 else:
