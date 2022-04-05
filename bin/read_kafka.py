@@ -12,6 +12,7 @@ import typing
 
 import aiohttp
 from aiokafka import AIOKafkaConsumer, TopicPartition
+from confluent_kafka.admin import AdminClient, NewTopic
 from kafkit.registry.aiohttp import RegistryApi
 from kafkit.registry import Deserializer
 import numpy as np
@@ -47,16 +48,22 @@ async def main() -> None:
         help="Number of messages to read; 0 for no limit.",
     )
     parser.add_argument(
+        "-t",
+        "--time",
+        action="store_true",
+        help="Measure the elapsed time. This requires number > 1.",
+    )
+    parser.add_argument(
         "--max_history_read",
         type=int,
         default=1000,
         help="The max number of historical samples to read for indexed SAL components.",
     )
     parser.add_argument(
-        "-t",
-        "--time",
-        action="store_true",
-        help="Measure the elapsed time. This requires number > 1.",
+        "--partitions",
+        type=int,
+        default=1,
+        help="The number of partitions per topic.",
     )
     parser.add_argument(
         "--postprocess",
@@ -98,6 +105,43 @@ async def main() -> None:
             schema_id_read_topics[schema_id] = topic_info
 
         all_topics = [topic_info.kafka_name for topic_info in topic_infos]
+
+        # Create missing topics
+        print("Create a broker client")
+        broker_client = AdminClient({"bootstrap.servers": "broker:29092"})
+        metadata = broker_client.list_topics(timeout=10)
+        existing_topic_names = set(metadata.topics.keys())
+        new_topic_names = sorted(set(all_topics) - existing_topic_names)
+        del_topic_names = sorted(set(all_topics) & existing_topic_names)
+        if del_topic_names:
+            print(f"Delete topics: {del_topic_names}")
+            del_result = broker_client.delete_topics(
+                del_topic_names, operation_timeout=10
+            )
+            for topic_name, future in del_result.items():
+                try:
+                    future.result()  # The result itself is None
+                except Exception as e:
+                    print(f"Failed to delete topic {topic_name}: {e!r}")
+                    raise
+        if new_topic_names:
+            print(f"Create topics: {new_topic_names}")
+            new_topic_metadata = [
+                NewTopic(
+                    topic_name,
+                    num_partitions=args.partitions,
+                    replication_factor=1,
+                )
+                for topic_name in new_topic_names
+            ]
+            fs = broker_client.create_topics(new_topic_metadata)
+            for topic_name, future in fs.items():
+                try:
+                    future.result()  # The result itself is None
+                except Exception as e:
+                    print(f"Failed to create topic {topic_name}: {e!r}")
+                    raise
+
         async with AIOKafkaConsumer(
             *all_topics, bootstrap_servers="broker:29092"
         ) as consumer:

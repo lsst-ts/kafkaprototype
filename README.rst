@@ -20,7 +20,7 @@ User Guide
 To read and write SAL messages:
 
 1) Git clone kafka-aggregator, cd into its root directory, and run the following:
-docker-compose up -d zookeeper broker schema-registry kafdrop
+docker-compose up -d zookeeper broker schema-registry # kafdrop
 
 This will download and run several docker images. The hostname and the port for each service is what you can use connect to, for example:
 * Schema registry: http://schema-registry:8081 inside the docker environment or http://localhost:8081 in the schema registry Docker image.
