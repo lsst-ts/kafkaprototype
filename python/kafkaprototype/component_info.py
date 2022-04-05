@@ -45,14 +45,14 @@ class ComponentInfo:
     def make_avro_schema_dict(self) -> typing.Dict[str, typing.Dict[str, typing.Any]]:
         """Create a dict of topic attr name: Avro schema dict."""
         return {
-            topic_info.attr_name: make_avro_schema()
+            topic_info.attr_name: topic_info.make_avro_schema()
             for topic_info in self.topics.values()
         }
 
     def make_pydantic_model_dict(self) -> typing.Dict[str, pydantic.Model]:
         """Create a dict of topic attr name: pydantic Model."""
         return {
-            topic_info.attr_name: make_pydantic_model()
+            topic_info.attr_name: topic_info.make_pydantic_model()
             for topic_info in self.topics.values()
         }
 
@@ -168,6 +168,7 @@ def parse_sal_generics():
     topic_element_dict = dict()
     for gen in generics.findall("*/"):
         topic_name = gen.find("EFDB_Topic").text
+        assert topic_name is not None
         brief_name = topic_name[len("SALGeneric_") :]
         topic_element_dict[brief_name] = gen
         category_elt = gen.find("Category")
