@@ -86,7 +86,7 @@ async def main() -> None:
             raise RuntimeError(f"Unexpected scalar type for {name}: {value!r}")
         data_dict[name] = value
 
-    with aiohttp.TCPConnector(limit_per_host=20) as connector:
+    async with aiohttp.TCPConnector(limit_per_host=20) as connector:
         http_session = aiohttp.ClientSession(connector=connector)
         print("Create RegistryApi")
         registry = RegistryApi(url=SCHMEA_REGISTRY_URL, session=http_session)

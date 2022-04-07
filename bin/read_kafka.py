@@ -89,7 +89,7 @@ async def main() -> None:
     }
     post_process = POST_PROCESS_DICT[args.postprocess]
     delays = []
-    with aiohttp.TCPConnector(limit_per_host=20) as connector:
+    async with aiohttp.TCPConnector(limit_per_host=20) as connector:
         http_session = aiohttp.ClientSession(connector=connector)
         print("Create RegistryApi")
         registry = RegistryApi(url=SCHMEA_REGISTRY_URL, session=http_session)
