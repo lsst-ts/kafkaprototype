@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import concurrent.futures
 import enum
+import threading
 import time
 
 import aiohttp
-from aiokafka import AIOKafkaProducer
+from confluent_kafka import Producer, KafkaException
+
+# from aiokafka import AIOKafkaProducer
 from kafkit.registry.aiohttp import RegistryApi
 from kafkit.registry import Serializer
 
@@ -95,11 +99,25 @@ async def main() -> None:
         print("Create a serializer")
         serializer = Serializer(schema=avro_schema, schema_id=schema_id)
         print("Create a producer")
-        async with AIOKafkaProducer(
-            bootstrap_servers="broker:29092",
-            acks=acks,
-            value_serializer=serializer,
-        ) as producer:
+        producer = Producer({"acks": acks, "bootstrap.servers": "broker:29092"})
+        topic_name = topic_info.kafka_name
+
+        loop = asyncio.get_running_loop()
+
+        def blocking_write(data_dict):
+            event = threading.Event()
+
+            def callback(err, _):
+                if err:
+                    raise KafkaException(err)
+                event.set()
+
+            raw_data = serializer(data_dict)
+            producer.produce(topic_name, raw_data, on_delivery=callback)
+            producer.flush()
+            event.wait()
+
+        with concurrent.futures.ThreadPoolExecutor() as pool:
             print("Publish data")
             t0 = time.time()
             for i in range(args.number):
@@ -126,9 +144,7 @@ async def main() -> None:
                     send_data_dict = model.dict()
                 else:
                     raise RuntimeError("Unsupported option")
-                await producer.send_and_wait(
-                    topic_info.kafka_name, value=send_data_dict
-                )
+                await loop.run_in_executor(pool, blocking_write, send_data_dict)
             dt = time.time() - t0
             print(f"Wrote {args.number/dt:0.1f} messages/second: {args}")
     # Give time for the reader to finish,

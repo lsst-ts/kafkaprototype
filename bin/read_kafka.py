@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import collections
+import base64
+import concurrent.futures
+
+# import collections
 import enum
+import os
 import time
 import types
 import typing
 
 import aiohttp
-from aiokafka import AIOKafkaConsumer, TopicPartition
-from confluent_kafka.admin import AdminClient, NewTopic
+
+from confluent_kafka import Consumer
+from confluent_kafka.admin import AdminClient, ConfigResource, NewTopic
+from confluent_kafka.error import KafkaError
 from kafkit.registry.aiohttp import RegistryApi
 from kafkit.registry import Deserializer
 import numpy as np
@@ -109,21 +115,31 @@ async def main() -> None:
         # Create missing topics
         print("Create a broker client")
         broker_client = AdminClient({"bootstrap.servers": "broker:29092"})
+        extra_topics = all_topics[:] + ["not_a_topic_name"]
+        resource_list = [
+            ConfigResource(restype=ConfigResource.Type.TOPIC, name=name)
+            for name in extra_topics
+        ]
+        config_future_dict = broker_client.describe_configs(resource_list)
+        add_topics = []
+        for config, future in config_future_dict.items():
+            topic_name = config.name
+            exception = future.exception()
+            if exception is not None:
+                if exception.args[0].code() == KafkaError.UNKNOWN_TOPIC_OR_PART:
+                    add_topics.append(
+                        NewTopic(
+                            topic_name,
+                            num_partitions=args.partitions,
+                            replication_factor=1,
+                        )
+                    )
+                else:
+                    print(f"Unknown issue with topic {topic_name}: {exception!r}")
+
         metadata = broker_client.list_topics(timeout=10)
         existing_topic_names = set(metadata.topics.keys())
         new_topic_names = sorted(set(all_topics) - existing_topic_names)
-        del_topic_names = sorted(set(all_topics) & existing_topic_names)
-        if del_topic_names:
-            print(f"Delete topics: {del_topic_names}")
-            del_result = broker_client.delete_topics(
-                del_topic_names, operation_timeout=10
-            )
-            for topic_name, future in del_result.items():
-                try:
-                    future.result()  # The result itself is None
-                except Exception as e:
-                    print(f"Failed to delete topic {topic_name}: {e!r}")
-                    raise
         if new_topic_names:
             print(f"Create topics: {new_topic_names}")
             new_topic_metadata = [
@@ -142,136 +158,29 @@ async def main() -> None:
                     print(f"Failed to create topic {topic_name}: {e!r}")
                     raise
 
-        async with AIOKafkaConsumer(
-            *all_topics, bootstrap_servers="broker:29092"
-        ) as consumer:
-            partition_lists = collections.defaultdict(list)
-            for partition in consumer.assignment():
-                partition_lists[partition.topic].append(partition)
+        random_str = base64.urlsafe_b64encode(os.urandom(12)).decode().replace("=", "_")
+        consumer = Consumer(
+            {"group.id": random_str, "bootstrap.servers": "broker:29092"}
+        )
+        consumer.subscribe(all_topics)
 
-            print("Try to read historical date")
-            try:
-                t0 = time.time()
-                # Historical data is wanted for one or more topics.
+        def blocking_read():
+            while True:
+                message = consumer.poll(timeout=0.1)
+                if message is not None:
+                    error = message.error()
+                    if error is not None:
+                        raise error
+                    return message
 
-                # List of historical data to print
-                # (after timing how long extraction took).
-                historical_data_list: typing.Dict[str, typing.Any] = []
-
-                # Dict of topic attr_name: TopicPartition
-                topic_partitions: typing.Dict[str, TopicPartition] = dict()
-                for topic_info in topic_infos:
-                    partition_ids = consumer.partitions_for_topic(topic_info.kafka_name)
-                    # Handling multiple partitions is too much effort
-                    if len(partition_ids) > 1:
-                        print(
-                            f"More than one partition for {topic_info.kafka_name}; "
-                            "cannot get historical data"
-                        )
-                        continue
-                    partition_id = list(partition_ids)[0]
-                    topic_partitions[topic_info.attr_name] = TopicPartition(
-                        topic_info.kafka_name, partition_id
-                    )
-
-                if not component_info.indexed:
-                    print(
-                        "Component is not indexed; read historical data the fast and easy way"
-                    )
-                    # Non-indexed SAL components are easy:
-                    # just set the index back one for each
-                    # topic for which we want historical data.
-                    # There is no need to read the data here;
-                    # let the main read loop handle it.
-                    for attr_name, partition in topic_partitions.items():
-                        position = await consumer.position(partition)
-                        if position == 0:
-                            print(f"No historical data available for {attr_name}")
-                            continue
-
-                        consumer.seek(partition=partition, offset=max(0, position - 1))
-
-                        raw_data = await consumer.getone(partition)
-                        full_data = await deserializer.deserialize(raw_data.value)
-                        data_dict = full_data["message"]
-                        historical_data_list.append(data_dict)
-                else:
-                    print(
-                        "Component is indexed. Read historical data the slow and complicated way."
-                    )
-                    # Indexed SAL components are harder because we
-                    # want the most recent value for each index
-                    # (if found within max_history_read messages).
-                    #
-                    # For each topic:
-                    # * Set the position way back
-                    # * Read all messages, accumulating them
-                    #   in a dict of [SAL index: data].
-                    # * Feed the data to the ReadTopic
-
-                    # Read max_history_read messages and save
-                    # the most recent value seen for each index
-                    for attr_name, partition in topic_partitions.items():
-                        position = await consumer.position(partition)
-                        if position == 0:
-                            print(f"No historical data available for {attr_name}")
-                            continue
-
-                        # Dict of SAL index: historical data dict
-                        historical_data_dicts: typing.Dict[
-                            int, typing.Dict[str, typing.Any]
-                        ] = dict()
-
-                        consumer.seek(
-                            partition=partition,
-                            offset=max(0, position - args.max_history_read),
-                        )
-
-                        end_position = position - 1
-                        while True:
-                            raw_data = await consumer.getone(partition)
-                            full_data = await deserializer.deserialize(raw_data.value)
-                            data_dict = full_data["message"]
-                            historical_data_dicts[
-                                data_dict["private_index"]
-                            ] = data_dict
-
-                            if raw_data.offset == end_position:
-                                # All done
-                                break
-
-                        historical_data_list += list(historical_data_dicts.values())
-
-                dt = time.time() - t0
-
-                for data_dict in historical_data_list:
-                    if component_info.indexed:
-                        print(
-                            f"Read historical data for {attr_name}: "
-                            f"private_index={data_dict['private_index']}, "
-                            f"private_seqNum={data_dict['private_seqNum']}, "
-                            f"private_sndStamp={data_dict['private_sndStamp']}, "
-                            f"data age={t0 - data_dict['private_sndStamp']:0.2f}"
-                        )
-                    else:
-                        print(
-                            f"Read historical data for {attr_name}: "
-                            f"private_seqNum={data_dict['private_seqNum']}, "
-                            f"private_sndStamp={data_dict['private_sndStamp']}, "
-                            f"data age={t0 - data_dict['private_sndStamp']:0.2f}"
-                        )
-
-                print(f"Reading historic data took {dt:0.2f} seconds")
-            except Exception as e:
-                print(f"Failed to read historical data: {e!r}")
-            if args.number == 0:
-                return
-            print("Reading new data")
-
+        loop = asyncio.get_running_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
             i = 0
-            async for raw_data in consumer:
+            while True:
+                message = await loop.run_in_executor(pool, blocking_read)
+                raw_data = message.value()
                 i += 1
-                full_data = await deserializer.deserialize(raw_data.value)
+                full_data = await deserializer.deserialize(raw_data)
                 schema_id = full_data["id"]
                 topic_info = schema_id_read_topics[schema_id]
                 data_dict = full_data["message"]
@@ -299,6 +208,7 @@ async def main() -> None:
                 # (and then to measure full read and process cycles).
                 if i == 1:
                     t0 = time.time()
+
             dt = time.time() - t0
             if args.time:
                 delays = np.array(delays)
