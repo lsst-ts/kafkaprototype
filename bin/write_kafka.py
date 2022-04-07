@@ -26,6 +26,9 @@ class ValidationType(enum.Enum):
 
 VALIDATION_DICT = {item.name.lower(): item for item in ValidationType}
 
+KAFKA_BROKER_ADDR = "broker:29092"
+SCHMEA_REGISTRY_URL = "http://schema-registry:8081"
+
 
 async def main() -> None:
     parser = argparse.ArgumentParser(
@@ -86,17 +89,24 @@ async def main() -> None:
     with aiohttp.TCPConnector(limit_per_host=20) as connector:
         http_session = aiohttp.ClientSession(connector=connector)
         print("Create RegistryApi")
-        registry = RegistryApi(url="http://schema-registry:8081", session=http_session)
+        registry = RegistryApi(url=SCHMEA_REGISTRY_URL, session=http_session)
         print("Register the schema")
         schema_id = await registry.register_schema(
             schema=avro_schema, subject=topic_info.avro_subject
         )
         print(f"schema_id={schema_id}")
+
+        # Create topic, if missing
+        kafkaprototype.create_topics(
+            kakfa_topic_names=[topic_info.kafka_name],
+            kafka_broker_addr=KAFKA_BROKER_ADDR,
+        )
+
         print("Create a serializer")
         serializer = Serializer(schema=avro_schema, schema_id=schema_id)
         print("Create a producer")
         async with AIOKafkaProducer(
-            bootstrap_servers="broker:29092",
+            bootstrap_servers=KAFKA_BROKER_ADDR,
             acks=acks,
             value_serializer=serializer,
         ) as producer:

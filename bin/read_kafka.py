@@ -12,7 +12,6 @@ import typing
 
 import aiohttp
 from aiokafka import AIOKafkaConsumer, TopicPartition
-from confluent_kafka.admin import AdminClient, NewTopic
 from kafkit.registry.aiohttp import RegistryApi
 from kafkit.registry import Deserializer
 import numpy as np
@@ -28,6 +27,9 @@ class PostProcess(enum.Enum):
 
 
 POST_PROCESS_DICT = {item.name.lower(): item for item in PostProcess}
+
+KAFKA_BROKER_ADDR = "broker:29092"
+SCHMEA_REGISTRY_URL = "http://schema-registry:8081"
 
 
 async def main() -> None:
@@ -90,7 +92,7 @@ async def main() -> None:
     with aiohttp.TCPConnector(limit_per_host=20) as connector:
         http_session = aiohttp.ClientSession(connector=connector)
         print("Create RegistryApi")
-        registry = RegistryApi(url="http://schema-registry:8081", session=http_session)
+        registry = RegistryApi(url=SCHMEA_REGISTRY_URL, session=http_session)
         print("Create a deserializer")
         deserializer = Deserializer(registry=registry)
         print("Create a consumer")
@@ -104,46 +106,15 @@ async def main() -> None:
             )
             schema_id_read_topics[schema_id] = topic_info
 
-        all_topics = [topic_info.kafka_name for topic_info in topic_infos]
+        kakfa_topic_names = [topic_info.kafka_name for topic_info in topic_infos]
 
         # Create missing topics
-        print("Create a broker client")
-        broker_client = AdminClient({"bootstrap.servers": "broker:29092"})
-        metadata = broker_client.list_topics(timeout=10)
-        existing_topic_names = set(metadata.topics.keys())
-        new_topic_names = sorted(set(all_topics) - existing_topic_names)
-        del_topic_names = sorted(set(all_topics) & existing_topic_names)
-        if del_topic_names:
-            print(f"Delete topics: {del_topic_names}")
-            del_result = broker_client.delete_topics(
-                del_topic_names, operation_timeout=10
-            )
-            for topic_name, future in del_result.items():
-                try:
-                    future.result()  # The result itself is None
-                except Exception as e:
-                    print(f"Failed to delete topic {topic_name}: {e!r}")
-                    raise
-        if new_topic_names:
-            print(f"Create topics: {new_topic_names}")
-            new_topic_metadata = [
-                NewTopic(
-                    topic_name,
-                    num_partitions=args.partitions,
-                    replication_factor=1,
-                )
-                for topic_name in new_topic_names
-            ]
-            fs = broker_client.create_topics(new_topic_metadata)
-            for topic_name, future in fs.items():
-                try:
-                    future.result()  # The result itself is None
-                except Exception as e:
-                    print(f"Failed to create topic {topic_name}: {e!r}")
-                    raise
+        kafkaprototype.create_topics(
+            kakfa_topic_names, kafka_broker_addr=KAFKA_BROKER_ADDR
+        )
 
         async with AIOKafkaConsumer(
-            *all_topics, bootstrap_servers="broker:29092"
+            *kakfa_topic_names, bootstrap_servers=KAFKA_BROKER_ADDR
         ) as consumer:
             partition_lists = collections.defaultdict(list)
             for partition in consumer.assignment():
