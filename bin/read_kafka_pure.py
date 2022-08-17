@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
+# A pure-confluent_kafka version (no kafkit)
+
 import argparse
 import asyncio
 import base64
 import concurrent.futures
+import json
 
 # import collections
 import enum
 import os
 import time
 import types
-import typing
-
-import aiohttp
 
 from confluent_kafka import Consumer
-from confluent_kafka.admin import AdminClient, ConfigResource, NewTopic
-from confluent_kafka.error import KafkaError
-from kafkit.registry.aiohttp import RegistryApi
-from kafkit.registry import Deserializer
+from confluent_kafka.schema_registry import SchemaRegistryClient, Schema
+from confluent_kafka.schema_registry.avro import AvroDeserializer
+from confluent_kafka.serialization import MessageField, SerializationContext
+
 import numpy as np
 
 import kafkaprototype
@@ -93,73 +93,39 @@ async def main() -> None:
     }
     post_process = POST_PROCESS_DICT[args.postprocess]
     delays = []
-    with aiohttp.TCPConnector(limit_per_host=20) as connector:
-        http_session = aiohttp.ClientSession(connector=connector)
-        print("Create RegistryApi")
-        registry = RegistryApi(url="http://schema-registry:8081", session=http_session)
-        print("Create a deserializer")
-        deserializer = Deserializer(registry=registry)
-        print("Create a consumer")
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        loop = asyncio.get_running_loop()
 
-        # Dict of kafka name: TopicInfo
-        kafka_name_topic_info: typing.Dict[str, kafkaprototype.TopicInfo] = dict()
+        print("Create Registry")
+        registry = SchemaRegistryClient(dict(url="http://schema-registry:8081"))
+
+        # Dict of schema_id: TopicInfo
+        print("Register schemas and make deserializers")
+        # Dict of Kafka topic name: deserializer, serialization context
+        topic_deserializers_contexts = dict()
         for topic_info in topic_infos:
             avro_schema = topic_info.make_avro_schema()
-            schema_id = await registry.register_schema(
-                schema=avro_schema, subject=topic_info.avro_subject
+            schema = Schema(json.dumps(avro_schema), "AVRO")
+            schema_id = await loop.run_in_executor(
+                pool, registry.register_schema, topic_info.avro_subject, schema
             )
-            kafka_name_topic_info[topic_info.kafka_name] = topic_info
-            print(
-                f"Registered schema with subject={topic_info.avro_subject} with ID {schema_id}"
+            print(f"schema_id={schema_id} for subject={topic_info.avro_subject}")
+            serialization_context = SerializationContext(
+                topic_info.kafka_name, MessageField.VALUE
+            )
+            deserializer = AvroDeserializer(registry, json.dumps(avro_schema))
+
+            topic_deserializers_contexts[topic_info.kafka_name] = (
+                deserializer,
+                serialization_context,
             )
 
         all_topics = [topic_info.kafka_name for topic_info in topic_infos]
 
-        # Create missing topics
-        print("Create a broker client")
-        broker_client = AdminClient({"bootstrap.servers": "broker:29092"})
-        extra_topics = all_topics[:] + ["not_a_topic_name"]
-        resource_list = [
-            ConfigResource(restype=ConfigResource.Type.TOPIC, name=name)
-            for name in extra_topics
-        ]
-        config_future_dict = broker_client.describe_configs(resource_list)
-        add_topics = []
-        for config, future in config_future_dict.items():
-            topic_name = config.name
-            exception = future.exception()
-            if exception is not None:
-                if exception.args[0].code() == KafkaError.UNKNOWN_TOPIC_OR_PART:
-                    add_topics.append(
-                        NewTopic(
-                            topic_name,
-                            num_partitions=args.partitions,
-                            replication_factor=1,
-                        )
-                    )
-                else:
-                    print(f"Unknown issue with topic {topic_name}: {exception!r}")
-
-        metadata = broker_client.list_topics(timeout=10)
-        existing_topic_names = set(metadata.topics.keys())
-        new_topic_names = sorted(set(all_topics) - existing_topic_names)
-        if new_topic_names:
-            print(f"Create topics: {new_topic_names}")
-            new_topic_metadata = [
-                NewTopic(
-                    topic_name,
-                    num_partitions=args.partitions,
-                    replication_factor=1,
-                )
-                for topic_name in new_topic_names
-            ]
-            fs = broker_client.create_topics(new_topic_metadata)
-            for topic_name, future in fs.items():
-                try:
-                    future.result()  # The result itself is None
-                except Exception as e:
-                    print(f"Failed to create topic {topic_name}: {e!r}")
-                    raise
+        # Create all topics
+        await loop.run_in_executor(
+            pool, kafkaprototype.blocking_create_topics, all_topics, "broker:29092"
+        )
 
         random_str = base64.urlsafe_b64encode(os.urandom(12)).decode().replace("=", "_")
         consumer = Consumer(
@@ -181,12 +147,10 @@ async def main() -> None:
             i = 0
             while True:
                 message = await loop.run_in_executor(pool, blocking_read)
-                name = message.topic()
+                deserializer, context = topic_deserializers_contexts[message.topic()]
                 raw_data = message.value()
                 i += 1
-                full_data = await deserializer.deserialize(raw_data)
-                topic_info = kafka_name_topic_info[name]
-                data_dict = full_data["message"]
+                data_dict = deserializer(raw_data, context)
                 current_tai = time.time()
                 data_dict["private_rcvStamp"] = current_tai
                 delays.append(current_tai - data_dict["private_sndStamp"])

@@ -1,19 +1,20 @@
 #!/usr/bin/env python
 
+# A pure-confluent_kafka version (no kafkit)
+
 from __future__ import annotations
 
 import argparse
 import asyncio
 import concurrent.futures
 import enum
+import json
 import time
 
-import aiohttp
 from confluent_kafka import Producer, KafkaException
-
-# from aiokafka import AIOKafkaProducer
-from kafkit.registry.aiohttp import RegistryApi
-from kafkit.registry import Serializer
+from confluent_kafka.schema_registry import SchemaRegistryClient, Schema
+from confluent_kafka.schema_registry.avro import AvroSerializer
+from confluent_kafka.serialization import MessageField, SerializationContext
 
 import kafkaprototype
 
@@ -86,30 +87,46 @@ async def main() -> None:
             raise RuntimeError(f"Unexpected scalar type for {name}: {value!r}")
         data_dict[name] = value
 
-    with aiohttp.TCPConnector(limit_per_host=20) as connector:
-        http_session = aiohttp.ClientSession(connector=connector)
-        print("Create RegistryApi")
-        registry = RegistryApi(url="http://schema-registry:8081", session=http_session)
-        print("Register the schema")
-        schema_id = await registry.register_schema(
-            schema=avro_schema, subject=topic_info.avro_subject
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        loop = asyncio.get_running_loop()
+
+        # Create the topic
+        await loop.run_in_executor(
+            pool,
+            kafkaprototype.blocking_create_topics,
+            [topic_info.kafka_name],
+            "broker:29092",
         )
-        print(f"schema_id={schema_id}")
+
+        # Register the schema and create a serializer
+        registry = SchemaRegistryClient(dict(url="http://schema-registry:8081"))
+
+        if True:
+            print("Register the schema")
+            schema = Schema(json.dumps(avro_schema), "AVRO")
+            # Is explicitly registering the schema necessary?
+            # Allegedly AvroSerializer does this (though it does
+            # not seem to return the ID of the schema).
+            schema_id = await loop.run_in_executor(
+                pool, registry.register_schema, topic_info.avro_subject, schema
+            )
+            print(f"schema_id={schema_id}; subject={topic_info.avro_subject}")
         print("Create a serializer")
-        serializer = Serializer(schema=avro_schema, schema_id=schema_id)
+        # Run in the background because it might register the schema
+        serializer = await loop.run_in_executor(
+            pool, AvroSerializer, registry, json.dumps(avro_schema)
+        )
         print("Create a producer")
         producer = Producer({"acks": acks, "bootstrap.servers": "broker:29092"})
         topic_name = topic_info.kafka_name
-
-        loop = asyncio.get_running_loop()
+        serialization_context = SerializationContext(
+            topic_info.kafka_name, MessageField.VALUE
+        )
 
         async def write_1(pool, data_dict):
-            """This is a bit ugly, but it works.
-
-            Also, it only uses approved APIs, likely in the approved way.
-            """
+            """This is a bit ugly, but it works."""
             future = loop.create_future()
-            raw_data = serializer(data_dict)
+            raw_data = serializer(data_dict, serialization_context)
 
             def blocking_write_1(raw_data):
                 def callback(err, _):
@@ -128,7 +145,10 @@ async def main() -> None:
 
         async def write_2(pool, data_dict):
             """This is cleaner, but creates concurrent.futures.Future()
-            directly, which is not recommended.
+            directly, which is explicitly not recommended.
+
+            Also I see occasional high max latency -- a bit more often
+            than using write_1.
             """
 
             def blocking_write_2(raw_data):
@@ -147,36 +167,36 @@ async def main() -> None:
             raw_data = serializer(data_dict)
             await loop.run_in_executor(pool, blocking_write_2, raw_data)
 
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            print("Publish data")
-            t0 = time.time()
-            for i in range(args.number):
-                data_dict["private_seqNum"] = i + 1
-                data_dict["private_sndStamp"] = time.time()
-                if component_info.indexed:
-                    data_dict["private_index"] = args.index
-                send_data_dict = data_dict
-                if validation == ValidationType.NONE:
-                    pass
-                elif validation == ValidationType.CUSTOM:
-                    topic_info.validate_data(data_dict)
-                elif validation == ValidationType.DATACLASS:
-                    DataClass(**data_dict)
-                elif validation == ValidationType.DATACLASS_AND_DECODE:
-                    model = DataClass(**data_dict)
-                    # Note: dataclasses.asdict is much slower than vars
-                    # send_data_dict = dataclasses.asdict(model)
-                    send_data_dict = vars(model)
-                elif validation == ValidationType.PYDANTIC:
-                    Model(**data_dict)
-                elif validation == ValidationType.PYDANTIC_AND_DECODE:
-                    model = Model(**data_dict)
-                    send_data_dict = model.dict()
-                else:
-                    raise RuntimeError("Unsupported option")
-                await write_1(pool, send_data_dict)
-            dt = time.time() - t0
-            print(f"Wrote {args.number/dt:0.1f} messages/second: {args}")
+        print("Publish data")
+        t0 = time.time()
+        for i in range(args.number):
+            data_dict["private_seqNum"] = i + 1
+            data_dict["private_sndStamp"] = time.time()
+            if component_info.indexed:
+                data_dict["private_index"] = args.index
+            send_data_dict = data_dict
+            if validation == ValidationType.NONE:
+                pass
+            elif validation == ValidationType.CUSTOM:
+                topic_info.validate_data(data_dict)
+            elif validation == ValidationType.DATACLASS:
+                DataClass(**data_dict)
+            elif validation == ValidationType.DATACLASS_AND_DECODE:
+                model = DataClass(**data_dict)
+                # Note: dataclasses.asdict is much slower than vars
+                # send_data_dict = dataclasses.asdict(model)
+                send_data_dict = vars(model)
+            elif validation == ValidationType.PYDANTIC:
+                Model(**data_dict)
+            elif validation == ValidationType.PYDANTIC_AND_DECODE:
+                model = Model(**data_dict)
+                send_data_dict = model.dict()
+            else:
+                raise RuntimeError("Unsupported option")
+            await write_1(pool, send_data_dict)
+        dt = time.time() - t0
+        print(f"Wrote {args.number/dt:0.1f} messages/second: {args}")
+
     # Give time for the reader to finish,
     # to simplify copying timing from the terminal.
     await asyncio.sleep(1)
