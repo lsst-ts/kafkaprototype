@@ -57,8 +57,17 @@ The reader also supports:
 * --postprocess test the performance of different kinds of data classes to hold the result.
 
 
-Here is an example:
+Here is an example with a large topic:
 
-read_kafka.py MTM1M3 tel_forceActuatorData -n 1000 -t --postprocess=simple_namespace &
+read_kafka.py MTM1M3 tel_forceActuatorData -n 2000 -t --postprocess=simple_namespace &
 # wait for it to start, then...
-write_kafka.py MTM1M3 tel_forceActuatorData -n 1000 --validation=custom
+write_kafka.py MTM1M3 tel_forceActuatorData -n 2000 --validation=custom
+
+And another example with a small topic:
+
+read_kafka.py Test evt_logLevel -n 2000 -t --postprocess=simple_namespace &
+# wait for it to start, then...
+write_kafka.py Test evt_logLevel -n 2000 --validation=custom
+
+The difference is likely to be small because the write speed is dominated by waiting for the broker
+to commit each message.

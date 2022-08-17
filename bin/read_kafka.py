@@ -62,12 +62,6 @@ async def main() -> None:
         help="The max number of historical samples to read for indexed SAL components.",
     )
     parser.add_argument(
-        "--partitions",
-        type=int,
-        default=1,
-        help="The number of partitions per topic.",
-    )
-    parser.add_argument(
         "--postprocess",
         choices=POST_PROCESS_DICT.keys(),
         default="dataclass",
@@ -89,8 +83,9 @@ async def main() -> None:
     }
     post_process = POST_PROCESS_DICT[args.postprocess]
     delays = []
-    async with aiohttp.TCPConnector(limit_per_host=20) as connector:
-        http_session = aiohttp.ClientSession(connector=connector)
+    async with aiohttp.TCPConnector(
+        limit_per_host=20
+    ) as connector, aiohttp.ClientSession(connector=connector) as http_session:
         print("Create RegistryApi")
         registry = RegistryApi(url=SCHMEA_REGISTRY_URL, session=http_session)
         print("Create a deserializer")
