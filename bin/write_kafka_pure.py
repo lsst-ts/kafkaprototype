@@ -116,15 +116,25 @@ async def main() -> None:
         serializer = await loop.run_in_executor(
             pool, AvroSerializer, registry, json.dumps(avro_schema)
         )
-        print("Create a producer")
-        producer = Producer({"acks": acks, "bootstrap.servers": "broker:29092"})
+        print(f"Create a producer with {acks=}")
+        producer = Producer(
+            {
+                "acks": acks,
+                "queue.buffering.max.ms": 0,
+                "bootstrap.servers": "broker:29092",
+            }
+        )
         topic_name = topic_info.kafka_name
         serialization_context = SerializationContext(
             topic_info.kafka_name, MessageField.VALUE
         )
 
         async def write_1(pool, data_dict):
-            """This is a bit ugly, but it works."""
+            """This is a bit ugly, but it works.
+
+            Also, it only uses approved APIs, likely in the approved way.
+            And it performs slightly better than write_2 on azar02.
+            """
             future = loop.create_future()
             raw_data = serializer(data_dict, serialization_context)
 
@@ -146,9 +156,6 @@ async def main() -> None:
         async def write_2(pool, data_dict):
             """This is cleaner, but creates concurrent.futures.Future()
             directly, which is explicitly not recommended.
-
-            Also I see occasional high max latency -- a bit more often
-            than using write_1.
             """
 
             def blocking_write_2(raw_data):
@@ -164,7 +171,7 @@ async def main() -> None:
                 producer.flush()
                 return asyncio.wrap_future(cfuture, loop=loop)
 
-            raw_data = serializer(data_dict)
+            raw_data = serializer(data_dict, serialization_context)
             await loop.run_in_executor(pool, blocking_write_2, raw_data)
 
         print("Publish data")

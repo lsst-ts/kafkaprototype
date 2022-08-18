@@ -97,8 +97,14 @@ async def main() -> None:
         print(f"schema_id={schema_id}")
         print("Create a serializer")
         serializer = Serializer(schema=avro_schema, schema_id=schema_id)
-        print("Create a producer")
-        producer = Producer({"acks": acks, "bootstrap.servers": "broker:29092"})
+        print(f"Create a producer with {acks=}")
+        producer = Producer(
+            {
+                "acks": acks,
+                "queue.buffering.max.ms": 0,
+                "bootstrap.servers": "broker:29092",
+            }
+        )
         topic_name = topic_info.kafka_name
 
         loop = asyncio.get_running_loop()
@@ -108,6 +114,7 @@ async def main() -> None:
 
             Also, it only uses approved APIs, likely in the approved way.
             """
+
             future = loop.create_future()
             raw_data = serializer(data_dict)
 
@@ -177,6 +184,7 @@ async def main() -> None:
                 await write_1(pool, send_data_dict)
             dt = time.time() - t0
             print(f"Wrote {args.number/dt:0.1f} messages/second: {args}")
+
     # Give time for the reader to finish,
     # to simplify copying timing from the terminal.
     await asyncio.sleep(1)
